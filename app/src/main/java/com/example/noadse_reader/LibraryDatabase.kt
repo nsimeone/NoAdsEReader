@@ -24,7 +24,8 @@ data class BookEntity(
     val addedAt: Long,
     val format: String,
     val lastLocator: String? = null,
-    val coverPath: String? = null
+    val coverPath: String? = null,
+    val progress: Double? = null
 )
 
 @Dao
@@ -41,14 +42,20 @@ interface BookDao {
     @Query("SELECT lastLocator FROM books WHERE fileName = :fileName")
     suspend fun getLocator(fileName: String): String?
 
-    @Query("UPDATE books SET lastLocator = :locator WHERE fileName = :fileName")
-    suspend fun saveLocator(fileName: String, locator: String)
+    @Query(
+        "UPDATE books SET lastLocator = :locator, " +
+                "progress = COALESCE(:progress, progress) WHERE fileName = :fileName"
+    )
+    suspend fun saveLocator(fileName: String, locator: String, progress: Double?)
 
     @Query("SELECT * FROM books WHERE coverPath IS NULL")
     suspend fun booksNeedingCovers(): List<BookEntity>
 
     @Query("UPDATE books SET coverPath = :path WHERE fileName = :fileName")
     suspend fun setCover(fileName: String, path: String)
+
+    @Query("DELETE FROM books WHERE fileName = :fileName")
+    suspend fun delete(fileName: String)
 }
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -63,7 +70,13 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [BookEntity::class], version = 3, exportSchema = false)
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override suspend fun migrate(connection: SQLiteConnection) {
+        connection.prepare("ALTER TABLE books ADD COLUMN progress REAL").use { it.step() }
+    }
+}
+
+@Database(entities = [BookEntity::class], version = 4, exportSchema = false)
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun books(): BookDao
 
@@ -78,7 +91,7 @@ abstract class LibraryDatabase : RoomDatabase() {
                     "library.db"
                 )
                     .setDriver(AndroidSQLiteDriver())
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

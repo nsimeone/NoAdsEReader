@@ -80,7 +80,11 @@ class ReaderActivity : FragmentActivity() {
             }
 
             navigator.currentLocator.collect { locator ->
-                dao.saveLocator(fileName, locator.toJSON().toString())
+                dao.saveLocator(
+                    fileName,
+                    locator.toJSON().toString(),
+                    locator.locations.totalProgression
+                )
             }
         }
     }
