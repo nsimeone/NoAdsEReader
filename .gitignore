@@ -20,3 +20,5 @@ keystore.properties
 
 *.apk
 *.aab
+
+deps.txt
