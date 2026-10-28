@@ -11,7 +11,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.noadse_reader"
+        applicationId = "io.github.nsimeone.noadsereader"
         minSdk = 28
         targetSdk = 37
         versionCode = 1

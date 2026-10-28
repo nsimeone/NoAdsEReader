@@ -35,8 +35,8 @@ import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
-import org.readium.r2.shared.publication.services.locateProgression
 import org.readium.r2.shared.util.AbsoluteUrl
+import org.readium.r2.shared.publication.services.locateProgression
 
 @OptIn(ExperimentalReadiumApi::class)
 class ReaderActivity : FragmentActivity() {
@@ -45,6 +45,8 @@ class ReaderActivity : FragmentActivity() {
     private var progress by mutableFloatStateOf(0f)
     private var fontSize by mutableDoubleStateOf(1.0)
     private var pageTheme by mutableStateOf(PageTheme.LIGHT)
+    private var bookmarks by mutableStateOf<List<BookmarkEntity>>(emptyList())
+    private var latestLocator: Locator? = null
 
     private fun currentPreferences() = EpubPreferences(
         fontSize = fontSize,
@@ -96,7 +98,9 @@ class ReaderActivity : FragmentActivity() {
         }
 
         lifecycleScope.launch {
-            val dao = LibraryDatabase.get(this@ReaderActivity).books()
+            val db = LibraryDatabase.get(this@ReaderActivity)
+            val dao = db.books()
+            val bookmarkDao = db.bookmarks()
             val settings = ReaderSettings(this@ReaderActivity)
             val file = File(File(filesDir, "books"), fileName)
             val publication = openPublication(this@ReaderActivity, file)
@@ -147,6 +151,10 @@ class ReaderActivity : FragmentActivity() {
                 }
             })
 
+            launch {
+                bookmarkDao.observeFor(fileName).collect { bookmarks = it }
+            }
+
             overlay.setContent {
                 NoAdsEReaderTheme {
                     ReaderControls(
@@ -154,6 +162,7 @@ class ReaderActivity : FragmentActivity() {
                         progress = progress,
                         fontSize = fontSize,
                         theme = pageTheme,
+                        bookmarks = bookmarks,
                         onFontSize = { newSize ->
                             fontSize = newSize.coerceIn(0.7, 2.5)
                             settings.fontSize = fontSize
@@ -176,12 +185,46 @@ class ReaderActivity : FragmentActivity() {
                                     ?.let { navigator.go(it) }
                             }
                         },
+                        onAddBookmark = {
+                            val locator = latestLocator
+                            if (locator != null) {
+                                lifecycleScope.launch {
+                                    bookmarkDao.insert(
+                                        BookmarkEntity(
+                                            bookFileName = fileName,
+                                            locator = locator.toJSON().toString(),
+                                            label = locator.title
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: "Bookmark",
+                                            progress = locator.locations.totalProgression,
+                                            createdAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                    Toast.makeText(
+                                        this@ReaderActivity,
+                                        "Bookmark added",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        },
+                        onOpenBookmark = { bookmark ->
+                            controlsVisible = false
+                            lifecycleScope.launch {
+                                Locator.fromJSON(JSONObject(bookmark.locator))
+                                    ?.let { navigator.go(it) }
+                            }
+                        },
+                        onDeleteBookmark = { bookmark ->
+                            lifecycleScope.launch { bookmarkDao.delete(bookmark.id) }
+                        },
                         onClose = { finish() }
                     )
                 }
             }
 
             navigator.currentLocator.collect { locator ->
+                latestLocator = locator
                 locator.locations.totalProgression?.let { progress = it.toFloat() }
                 dao.saveLocator(
                     fileName,

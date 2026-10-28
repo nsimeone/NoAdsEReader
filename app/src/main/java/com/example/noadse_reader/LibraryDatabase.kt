@@ -28,6 +28,16 @@ data class BookEntity(
     val progress: Double? = null
 )
 
+@Entity(tableName = "bookmarks")
+data class BookmarkEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookFileName: String,
+    val locator: String,
+    val label: String,
+    val progress: Double?,
+    val createdAt: Long
+)
+
 @Dao
 interface BookDao {
     @Query("SELECT * FROM books ORDER BY title COLLATE NOCASE")
@@ -58,6 +68,24 @@ interface BookDao {
     suspend fun delete(fileName: String)
 }
 
+@Dao
+interface BookmarkDao {
+    @Query(
+        "SELECT * FROM bookmarks WHERE bookFileName = :fileName " +
+                "ORDER BY progress ASC, createdAt ASC"
+    )
+    fun observeFor(fileName: String): Flow<List<BookmarkEntity>>
+
+    @Insert
+    suspend fun insert(bookmark: BookmarkEntity)
+
+    @Query("DELETE FROM bookmarks WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM bookmarks WHERE bookFileName = :fileName")
+    suspend fun deleteAllFor(fileName: String)
+}
+
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override suspend fun migrate(connection: SQLiteConnection) {
         connection.prepare("ALTER TABLE books ADD COLUMN lastLocator TEXT").use { it.step() }
@@ -76,9 +104,28 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-@Database(entities = [BookEntity::class], version = 4, exportSchema = false)
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override suspend fun migrate(connection: SQLiteConnection) {
+        connection.prepare(
+            "CREATE TABLE IF NOT EXISTS bookmarks (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "bookFileName TEXT NOT NULL, " +
+                    "locator TEXT NOT NULL, " +
+                    "label TEXT NOT NULL, " +
+                    "progress REAL, " +
+                    "createdAt INTEGER NOT NULL)"
+        ).use { it.step() }
+    }
+}
+
+@Database(
+    entities = [BookEntity::class, BookmarkEntity::class],
+    version = 5,
+    exportSchema = false
+)
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun books(): BookDao
+    abstract fun bookmarks(): BookmarkDao
 
     companion object {
         @Volatile
@@ -91,7 +138,12 @@ abstract class LibraryDatabase : RoomDatabase() {
                     "library.db"
                 )
                     .setDriver(AndroidSQLiteDriver())
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5
+                    )
                     .build()
                     .also { instance = it }
             }

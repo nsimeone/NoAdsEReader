@@ -12,6 +12,8 @@ suspend fun deleteBook(context: Context, book: BookEntity) = withContext(Dispatc
         book.coverPath
             ?.takeIf { it.isNotEmpty() }
             ?.let { File(it).delete() }
-        LibraryDatabase.get(context).books().delete(book.fileName)
+        val db = LibraryDatabase.get(context)
+        db.bookmarks().deleteAllFor(book.fileName)
+        db.books().delete(book.fileName)
     }
 }
