@@ -27,10 +27,12 @@ fun AppScreen(modifier: Modifier = Modifier) {
         PrimaryTabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Library") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Import") })
+            Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("About") })
         }
         when (tab) {
             0 -> LibraryScreen(modifier = Modifier.weight(1f))
-            else -> ImportScreen(modifier = Modifier.weight(1f))
+            1 -> ImportScreen(modifier = Modifier.weight(1f))
+            else -> AboutScreen(modifier = Modifier.weight(1f))
         }
     }
 }
