@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -46,6 +48,7 @@ fun ReaderControls(
     fontSize: Double,
     theme: PageTheme,
     bookmarks: List<BookmarkEntity>,
+    contents: List<TocEntry>,
     onFontSize: (Double) -> Unit,
     onTheme: (PageTheme) -> Unit,
     onSeek: (Float) -> Unit,
@@ -53,9 +56,11 @@ fun ReaderControls(
     onAddBookmark: () -> Unit,
     onOpenBookmark: (BookmarkEntity) -> Unit,
     onDeleteBookmark: (BookmarkEntity) -> Unit,
+    onOpenContents: (Int) -> Unit,
     onClose: () -> Unit
 ) {
     var showBookmarks by remember { mutableStateOf(false) }
+    var showContents by remember { mutableStateOf(false) }
 
     if (showBookmarks) {
         AlertDialog(
@@ -100,6 +105,44 @@ fun ReaderControls(
             },
             confirmButton = {
                 TextButton(onClick = { showBookmarks = false }) { Text("Close") }
+            }
+        )
+    }
+
+    if (showContents) {
+        AlertDialog(
+            onDismissRequest = { showContents = false },
+            title = { Text("Contents") },
+            text = {
+                if (contents.isEmpty()) {
+                    Text(
+                        "This book doesn't include a chapter list. If it has a contents " +
+                                "page, look for it near the start of the book."
+                    )
+                } else {
+                    LazyColumn {
+                        itemsIndexed(contents) { index, entry ->
+                            Text(
+                                text = entry.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onOpenContents(index)
+                                        showContents = false
+                                    }
+                                    .padding(
+                                        start = (entry.depth * 16).dp,
+                                        top = 10.dp,
+                                        bottom = 10.dp
+                                    )
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showContents = false }) { Text("Close") }
             }
         )
     }
@@ -162,16 +205,43 @@ fun ReaderControls(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onAddBookmark) { Text("Add bookmark") }
-                        OutlinedButton(onClick = { showBookmarks = true }) {
-                            Text("Bookmarks (${bookmarks.size})")
+                        Button(
+                            onClick = onAddBookmark,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Add bookmark", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { showBookmarks = true },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Bookmarks (${bookmarks.size})", maxLines = 1)
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onGoToStart) { Text("Go to start") }
-                        OutlinedButton(onClick = onClose) { Text("Close book") }
+                        OutlinedButton(
+                            onClick = { showContents = true },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Contents", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onGoToStart,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Go to start", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onClose,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Close book", maxLines = 1)
+                        }
                     }
                 }
             }

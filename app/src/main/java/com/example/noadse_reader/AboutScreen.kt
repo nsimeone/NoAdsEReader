@@ -36,6 +36,7 @@ fun AboutScreen(modifier: Modifier = Modifier) {
         }.getOrNull() ?: "unknown"
     }
     val readiumLicense = remember { readAsset(context, "LICENSE-readium.txt") }
+    val jsoupLicense = remember { readAsset(context, "LICENSE-jsoup.txt") }
     val apacheLicense = remember { readAsset(context, "LICENSE-apache-2.0.txt") }
 
     Column(
@@ -72,9 +73,19 @@ fun AboutScreen(modifier: Modifier = Modifier) {
         Text(readiumLicense, style = MaterialTheme.typography.bodySmall)
         Spacer(modifier = Modifier.height(16.dp))
 
+        Text("jsoup", style = MaterialTheme.typography.titleSmall)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(jsoupLicense, style = MaterialTheme.typography.bodySmall)
+        Spacer(modifier = Modifier.height(16.dp))
+
         Text(
-            "Android Jetpack, Compose, Room, Material and Kotlin libraries",
+            "Apache License 2.0 libraries",
             style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            "Android Jetpack, Compose, Room and SQLite, Media3, Kotlin and kotlinx, " +
+                    "Guava, Timber, Koi, JSpecify, and JetBrains annotations.",
+            style = MaterialTheme.typography.bodySmall
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(apacheLicense, style = MaterialTheme.typography.bodySmall)

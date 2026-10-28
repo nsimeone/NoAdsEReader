@@ -35,8 +35,8 @@ import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
-import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.publication.services.locateProgression
+import org.readium.r2.shared.util.AbsoluteUrl
 
 @OptIn(ExperimentalReadiumApi::class)
 class ReaderActivity : FragmentActivity() {
@@ -46,6 +46,7 @@ class ReaderActivity : FragmentActivity() {
     private var fontSize by mutableDoubleStateOf(1.0)
     private var pageTheme by mutableStateOf(PageTheme.LIGHT)
     private var bookmarks by mutableStateOf<List<BookmarkEntity>>(emptyList())
+    private var contents by mutableStateOf<List<TocEntry>>(emptyList()) // NEW (change 1 of 3)
     private var latestLocator: Locator? = null
 
     private fun currentPreferences() = EpubPreferences(
@@ -138,6 +139,9 @@ class ReaderActivity : FragmentActivity() {
 
             val navigator = supportFragmentManager.findFragmentByTag("reader") as EpubNavigatorFragment
 
+            val flatToc = flattenToc(publication) // NEW (change 2 of 3)
+            contents = flatToc.entries // NEW (change 2 of 3)
+
             (navigator as? OverflowableNavigator)?.apply {
                 addInputListener(DirectionalNavigationAdapter(this))
             }
@@ -163,6 +167,7 @@ class ReaderActivity : FragmentActivity() {
                         fontSize = fontSize,
                         theme = pageTheme,
                         bookmarks = bookmarks,
+                        contents = contents, // NEW (change 3 of 3)
                         onFontSize = { newSize ->
                             fontSize = newSize.coerceIn(0.7, 2.5)
                             settings.fontSize = fontSize
@@ -217,6 +222,10 @@ class ReaderActivity : FragmentActivity() {
                         },
                         onDeleteBookmark = { bookmark ->
                             lifecycleScope.launch { bookmarkDao.delete(bookmark.id) }
+                        },
+                        onOpenContents = { index -> // NEW (change 3 of 3)
+                            controlsVisible = false
+                            lifecycleScope.launch { navigator.go(flatToc.links[index]) }
                         },
                         onClose = { finish() }
                     )
