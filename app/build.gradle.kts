@@ -54,7 +54,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_configuration_minimal:2.1.5")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("org.readium.kotlin-toolkit:readium-shared:3.4.0")
     implementation("org.readium.kotlin-toolkit:readium-streamer:3.4.0")
     implementation("org.readium.kotlin-toolkit:readium-navigator:3.4.0")
