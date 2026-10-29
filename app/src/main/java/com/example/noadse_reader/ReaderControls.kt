@@ -19,10 +19,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -42,9 +45,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import androidx.compose.material3.Checkbox
 
 @Composable
 fun ReaderControls(
@@ -69,11 +78,124 @@ fun ReaderControls(
     onSaveNote: (HighlightEntity, String) -> Unit, // NEW
     onDeleteHighlight: (HighlightEntity) -> Unit, // NEW
     onDismissEdit: () -> Unit, // NEW
+    searchState: SearchUiState, // NEW (search)
+    onSearch: (String, Boolean) -> Unit,
+    onMoreResults: () -> Unit, // NEW (search)
+    onOpenHit: (SearchHit) -> Unit, // NEW (search)
+    onClearSearch: () -> Unit, // NEW (search)
     onClose: () -> Unit
 ) {
     var showBookmarks by remember { mutableStateOf(false) }
     var showContents by remember { mutableStateOf(false) }
-    var showHighlights by remember { mutableStateOf(false) } // NEW
+    var showHighlights by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var queryText by remember { mutableStateOf("") }
+    var wholeWordOnly by remember { mutableStateOf(true) }
+
+    // NEW (search): the Search dialog. The results stay in place after you jump to one,
+    // so you can reopen this and step through the next match.
+    if (showSearch) {
+        AlertDialog(
+            onDismissRequest = { showSearch = false },
+            title = { Text("Search") },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = queryText,
+                            onValueChange = { queryText = it },
+                            label = { Text("Word or phrase") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { onSearch(queryText, wholeWordOnly) }),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = { onSearch(queryText, wholeWordOnly) }) { Text("Go") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = wholeWordOnly,
+                            onCheckedChange = { wholeWordOnly = it }
+                        )
+                        Text("Whole words only")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val status = when {
+                        searchState.unavailable -> "Search isn't available for this book."
+                        searchState.searching && searchState.hits.isEmpty() -> "Searching…"
+                        searchState.searched && searchState.hits.isEmpty() ->
+                            "No results for \"${searchState.query}\"."
+                        searchState.hits.isNotEmpty() ->
+                            "${searchState.hits.size}${if (searchState.hasMore) "+" else ""} " +
+                                    "results for \"${searchState.query}\" (marked in pink on the page)"
+                        else -> ""
+                    }
+                    if (status.isNotEmpty()) {
+                        Text(status, style = MaterialTheme.typography.labelLarge)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                        items(searchState.hits) { hit ->
+                            val snippet = buildAnnotatedString {
+                                if (hit.before.isNotEmpty()) append("…" + hit.before)
+                                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                                    append(hit.match)
+                                }
+                                if (hit.after.isNotEmpty()) append(hit.after + "…")
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onOpenHit(hit)
+                                        showSearch = false
+                                    }
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = snippet,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (hit.where.isNotEmpty()) {
+                                    Text(hit.where, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        item {
+                            if (searchState.searching && searchState.hits.isNotEmpty()) {
+                                Text(
+                                    "Searching…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            } else if (searchState.hasMore) {
+                                TextButton(onClick = onMoreResults) {
+                                    Text("Show more results")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSearch = false }) { Text("Close") }
+            },
+            dismissButton = {
+                if (searchState.query.isNotEmpty()) {
+                    TextButton(onClick = {
+                        onClearSearch()
+                        queryText = ""
+                    }) {
+                        Text("Clear search")
+                    }
+                }
+            }
+        )
+    }
 
     // NEW: the note editor. It opens when you tap a highlight on the page,
     // or press "Note" in the Highlights list.
@@ -362,6 +484,18 @@ fun ReaderControls(
                         ) {
                             Text("Highlights (${highlights.size})", maxLines = 1)
                         }
+                        // NEW (search): Search button, next to Highlights
+                        OutlinedButton(
+                            onClick = { showSearch = true },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Search", maxLines = 1)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { showContents = true },
                             modifier = Modifier.weight(1f),
@@ -369,10 +503,6 @@ fun ReaderControls(
                         ) {
                             Text("Contents", maxLines = 1)
                         }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = onGoToStart,
                             modifier = Modifier.weight(1f),

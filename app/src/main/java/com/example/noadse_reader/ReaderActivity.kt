@@ -28,6 +28,7 @@ import androidx.fragment.app.FragmentContainerView
 import androidx.lifecycle.lifecycleScope
 import com.example.noadse_reader.ui.theme.NoAdsEReaderTheme
 import java.io.File
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.readium.r2.navigator.DecorableNavigator
@@ -42,7 +43,11 @@ import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
+import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.locateProgression
+import org.readium.r2.shared.publication.services.search.SearchIterator
+import org.readium.r2.shared.publication.services.search.SearchService
+import org.readium.r2.shared.publication.services.search.search
 import org.readium.r2.shared.util.AbsoluteUrl
 
 @OptIn(ExperimentalReadiumApi::class)
@@ -54,10 +59,14 @@ class ReaderActivity : FragmentActivity() {
     private var pageTheme by mutableStateOf(PageTheme.LIGHT)
     private var bookmarks by mutableStateOf<List<BookmarkEntity>>(emptyList())
     private var contents by mutableStateOf<List<TocEntry>>(emptyList())
-    private var highlights by mutableStateOf<List<HighlightEntity>>(emptyList()) // NEW
-    private var editingHighlight by mutableStateOf<HighlightEntity?>(null) // NEW
+    private var highlights by mutableStateOf<List<HighlightEntity>>(emptyList())
+    private var editingHighlight by mutableStateOf<HighlightEntity?>(null)
     private var latestLocator: Locator? = null
-    private var readerNavigator: EpubNavigatorFragment? = null // NEW
+    private var readerNavigator: EpubNavigatorFragment? = null
+    private var readerPublication: Publication? = null
+    private var searchState by mutableStateOf(SearchUiState())
+    private var searchIterator: SearchIterator? = null
+    private var searchJob: Job? = null
 
     private fun currentPreferences() = EpubPreferences(
         fontSize = fontSize,
@@ -73,15 +82,13 @@ class ReaderActivity : FragmentActivity() {
         return if (mode == Configuration.UI_MODE_NIGHT_YES) PageTheme.DARK else PageTheme.LIGHT
     }
 
-    // NEW: the menu that appears when you select text. It replaces the standard
-    // Copy / Share / Select all menu with four highlight colors plus Copy.
     private fun createSelectionMenu(
         fileName: String,
         highlightDao: HighlightDao
     ): ActionMode.Callback = object : ActionMode.Callback {
 
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-            menu.clear() // remove the standard items
+            menu.clear()
             HighlightColor.entries.forEachIndexed { index, color ->
                 menu.add(Menu.NONE, index, index, color.label)
             }
@@ -129,7 +136,6 @@ class ReaderActivity : FragmentActivity() {
         override fun onDestroyActionMode(mode: ActionMode) {}
     }
 
-    // NEW: turns saved highlights into Readium "decorations" (what it draws on the page).
     private fun toDecorations(list: List<HighlightEntity>): List<Decoration> =
         list.mapNotNull { highlight ->
             val locator = Locator.fromJSON(JSONObject(highlight.locator))
@@ -142,6 +148,76 @@ class ReaderActivity : FragmentActivity() {
                 )
             )
         }
+
+    // Search: start a brand-new search for the word or phrase you typed.
+    private fun startSearch(query: String, wholeWord: Boolean) {
+        val publication = readerPublication ?: return
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+        searchJob?.cancel()
+        searchIterator = null
+        searchState = SearchUiState(query = trimmed, searching = true, wholeWord = wholeWord)
+        searchJob = lifecycleScope.launch {
+            // caseSensitive = false
+            val iterator = publication.search(trimmed, SearchService.Options(caseSensitive = false))
+            if (iterator == null) {
+                searchState = searchState.copy(
+                    searching = false,
+                    searched = true,
+                    unavailable = true
+                )
+                return@launch
+            }
+            searchIterator = iterator
+            loadSearchHits(SEARCH_PAGE_SIZE)
+        }
+    }
+
+    // Loads search results page by page until about `target` new matches are found.
+    private suspend fun loadSearchHits(target: Int) {
+        val iterator = searchIterator ?: return
+        var added = 0
+        var reachedEnd = false
+        searchState = searchState.copy(searching = true)
+        while (added < target) {
+            val page = iterator.next().getOrNull()
+            if (page == null) {
+                reachedEnd = true
+                break
+            }
+            val newHits = page.locators
+                .filter { !searchState.wholeWord || it.isWholeWord() }
+                .map { it.toSearchHit() }
+            added += newHits.size
+            searchState = searchState.copy(hits = searchState.hits + newHits)
+        }
+        searchState = searchState.copy(
+            searching = false,
+            searched = true,
+            hasMore = !reachedEnd
+        )
+        markSearchHits()
+    }
+
+    // Search: paint every result found so far on the page pink.
+    private suspend fun markSearchHits() {
+        val decorations = searchState.hits.mapIndexed { index, hit ->
+            Decoration(
+                id = "hit-$index",
+                locator = hit.locator,
+                style = Decoration.Style.Highlight(tint = SEARCH_TINT)
+            )
+        }
+        readerNavigator?.applyDecorations(decorations, SEARCH_GROUP)
+    }
+
+    // Search: forget the search and remove the pink marks.
+    private fun clearSearch() {
+        searchJob?.cancel()
+        searchIterator = null
+        searchState = SearchUiState()
+        lifecycleScope.launch { markSearchHits() }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(null)
@@ -223,7 +299,8 @@ class ReaderActivity : FragmentActivity() {
                 .commitNow()
 
             val navigator = supportFragmentManager.findFragmentByTag("reader") as EpubNavigatorFragment
-            readerNavigator = navigator // NEW
+            readerNavigator = navigator
+            readerPublication = publication
 
             val flatToc = flattenToc(publication)
             contents = flatToc.entries.takeIf { it.size > 1 } ?: emptyList()
@@ -278,7 +355,8 @@ class ReaderActivity : FragmentActivity() {
                         bookmarks = bookmarks,
                         contents = contents,
                         highlights = highlights, // NEW
-                        editingHighlight = editingHighlight, // NEW
+                        editingHighlight = editingHighlight,
+                        searchState = searchState, // NEW (search)
                         onFontSize = { newSize ->
                             fontSize = newSize.coerceIn(0.7, 2.5)
                             settings.fontSize = fontSize
@@ -361,6 +439,20 @@ class ReaderActivity : FragmentActivity() {
                             lifecycleScope.launch { highlightDao.delete(highlight.id) }
                         },
                         onDismissEdit = { editingHighlight = null },
+                        // NEW (search)
+                        onSearch = { query, wholeWord -> startSearch(query, wholeWord) },
+                        onMoreResults = {
+                            if (!searchState.searching) {
+                                searchJob = lifecycleScope.launch {
+                                    loadSearchHits(SEARCH_PAGE_SIZE)
+                                }
+                            }
+                        },
+                        onOpenHit = { hit ->
+                            controlsVisible = false
+                            lifecycleScope.launch { navigator.go(hit.locator) }
+                        },
+                        onClearSearch = { clearSearch() },
                         onClose = { finish() }
                     )
                 }
@@ -380,8 +472,11 @@ class ReaderActivity : FragmentActivity() {
 
     companion object {
         private const val EXTRA_FILE_NAME = "fileName"
-        private const val HIGHLIGHT_GROUP = "user-highlights" // NEW
-        private const val MENU_COPY = 100 // NEW
+        private const val HIGHLIGHT_GROUP = "user-highlights"
+        private const val MENU_COPY = 100
+        private const val SEARCH_GROUP = "search-results"
+        private const val SEARCH_PAGE_SIZE = 40
+        private val SEARCH_TINT = 0xFFE91E63.toInt()
 
         fun start(context: Context, fileName: String) {
             context.startActivity(
