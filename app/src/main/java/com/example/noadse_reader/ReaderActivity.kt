@@ -1,9 +1,14 @@
 package com.example.noadse_reader
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -25,6 +30,8 @@ import com.example.noadse_reader.ui.theme.NoAdsEReaderTheme
 import java.io.File
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import org.readium.r2.navigator.DecorableNavigator
+import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.OverflowableNavigator
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
@@ -46,8 +53,11 @@ class ReaderActivity : FragmentActivity() {
     private var fontSize by mutableDoubleStateOf(1.0)
     private var pageTheme by mutableStateOf(PageTheme.LIGHT)
     private var bookmarks by mutableStateOf<List<BookmarkEntity>>(emptyList())
-    private var contents by mutableStateOf<List<TocEntry>>(emptyList()) // NEW (change 1 of 3)
+    private var contents by mutableStateOf<List<TocEntry>>(emptyList())
+    private var highlights by mutableStateOf<List<HighlightEntity>>(emptyList()) // NEW
+    private var editingHighlight by mutableStateOf<HighlightEntity?>(null) // NEW
     private var latestLocator: Locator? = null
+    private var readerNavigator: EpubNavigatorFragment? = null // NEW
 
     private fun currentPreferences() = EpubPreferences(
         fontSize = fontSize,
@@ -62,6 +72,76 @@ class ReaderActivity : FragmentActivity() {
         val mode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         return if (mode == Configuration.UI_MODE_NIGHT_YES) PageTheme.DARK else PageTheme.LIGHT
     }
+
+    // NEW: the menu that appears when you select text. It replaces the standard
+    // Copy / Share / Select all menu with four highlight colors plus Copy.
+    private fun createSelectionMenu(
+        fileName: String,
+        highlightDao: HighlightDao
+    ): ActionMode.Callback = object : ActionMode.Callback {
+
+        override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+            menu.clear() // remove the standard items
+            HighlightColor.entries.forEachIndexed { index, color ->
+                menu.add(Menu.NONE, index, index, color.label)
+            }
+            menu.add(Menu.NONE, MENU_COPY, MENU_COPY, "Copy")
+            return true
+        }
+
+        override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean = false
+
+        override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+            val navigator = readerNavigator ?: return false
+            val color = HighlightColor.entries.getOrNull(item.itemId)
+            val isCopy = item.itemId == MENU_COPY
+            lifecycleScope.launch {
+                // Read the selection BEFORE closing the menu, because closing it
+                // can clear the selection.
+                val selection = navigator.currentSelection()
+                val text = selection?.locator?.text?.highlight?.trim().orEmpty()
+                if (selection != null && text.isNotEmpty()) {
+                    if (isCopy) {
+                        val clipboard = getSystemService(ClipboardManager::class.java)
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Selected text", text))
+                        Toast.makeText(this@ReaderActivity, "Copied", Toast.LENGTH_SHORT).show()
+                    } else if (color != null) {
+                        highlightDao.insert(
+                            HighlightEntity(
+                                bookFileName = fileName,
+                                locator = selection.locator.toJSON().toString(),
+                                text = text,
+                                color = color.name,
+                                note = null,
+                                progress = selection.locator.locations.totalProgression
+                                    ?: latestLocator?.locations?.totalProgression,
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+                navigator.clearSelection()
+                mode.finish()
+            }
+            return true
+        }
+
+        override fun onDestroyActionMode(mode: ActionMode) {}
+    }
+
+    // NEW: turns saved highlights into Readium "decorations" (what it draws on the page).
+    private fun toDecorations(list: List<HighlightEntity>): List<Decoration> =
+        list.mapNotNull { highlight ->
+            val locator = Locator.fromJSON(JSONObject(highlight.locator))
+                ?: return@mapNotNull null
+            Decoration(
+                id = highlight.id.toString(),
+                locator = locator,
+                style = Decoration.Style.Highlight(
+                    tint = HighlightColor.fromName(highlight.color).argb
+                )
+            )
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(null)
@@ -102,6 +182,7 @@ class ReaderActivity : FragmentActivity() {
             val db = LibraryDatabase.get(this@ReaderActivity)
             val dao = db.books()
             val bookmarkDao = db.bookmarks()
+            val highlightDao = db.highlights() // NEW
             val settings = ReaderSettings(this@ReaderActivity)
             val file = File(File(filesDir, "books"), fileName)
             val publication = openPublication(this@ReaderActivity, file)
@@ -130,6 +211,10 @@ class ReaderActivity : FragmentActivity() {
                     override fun onExternalLinkActivated(url: AbsoluteUrl) {
                         // Web links inside a book are ignored for now.
                     }
+                },
+                // NEW: install our own text-selection menu
+                configuration = EpubNavigatorFragment.Configuration().apply {
+                    selectionActionModeCallback = createSelectionMenu(fileName, highlightDao)
                 }
             )
 
@@ -138,9 +223,10 @@ class ReaderActivity : FragmentActivity() {
                 .commitNow()
 
             val navigator = supportFragmentManager.findFragmentByTag("reader") as EpubNavigatorFragment
+            readerNavigator = navigator // NEW
 
-            val flatToc = flattenToc(publication) // NEW (change 2 of 3)
-            contents = flatToc.entries // NEW (change 2 of 3)
+            val flatToc = flattenToc(publication)
+            contents = flatToc.entries.takeIf { it.size > 1 } ?: emptyList()
 
             (navigator as? OverflowableNavigator)?.apply {
                 addInputListener(DirectionalNavigationAdapter(this))
@@ -159,6 +245,29 @@ class ReaderActivity : FragmentActivity() {
                 bookmarkDao.observeFor(fileName).collect { bookmarks = it }
             }
 
+            // NEW: whenever the saved highlights change, update the list and redraw the page.
+            launch {
+                highlightDao.observeFor(fileName).collect { list ->
+                    highlights = list
+                    navigator.applyDecorations(toDecorations(list), HIGHLIGHT_GROUP)
+                }
+            }
+
+            // NEW: tapping an existing highlight on the page opens its note editor.
+            navigator.addDecorationListener(
+                HIGHLIGHT_GROUP,
+                object : DecorableNavigator.Listener {
+                    override fun onDecorationActivated(
+                        event: DecorableNavigator.OnActivatedEvent
+                    ): Boolean {
+                        val id = event.decoration.id.toLongOrNull() ?: return false
+                        val found = highlights.firstOrNull { it.id == id } ?: return false
+                        editingHighlight = found
+                        return true
+                    }
+                }
+            )
+
             overlay.setContent {
                 NoAdsEReaderTheme {
                     ReaderControls(
@@ -167,7 +276,9 @@ class ReaderActivity : FragmentActivity() {
                         fontSize = fontSize,
                         theme = pageTheme,
                         bookmarks = bookmarks,
-                        contents = contents, // NEW (change 3 of 3)
+                        contents = contents,
+                        highlights = highlights, // NEW
+                        editingHighlight = editingHighlight, // NEW
                         onFontSize = { newSize ->
                             fontSize = newSize.coerceIn(0.7, 2.5)
                             settings.fontSize = fontSize
@@ -223,10 +334,33 @@ class ReaderActivity : FragmentActivity() {
                         onDeleteBookmark = { bookmark ->
                             lifecycleScope.launch { bookmarkDao.delete(bookmark.id) }
                         },
-                        onOpenContents = { index -> // NEW (change 3 of 3)
+                        onOpenContents = { index ->
                             controlsVisible = false
                             lifecycleScope.launch { navigator.go(flatToc.links[index]) }
                         },
+                        // NEW: highlight actions
+                        onOpenHighlight = { highlight ->
+                            controlsVisible = false
+                            lifecycleScope.launch {
+                                Locator.fromJSON(JSONObject(highlight.locator))
+                                    ?.let { navigator.go(it) }
+                            }
+                        },
+                        onEditHighlight = { highlight -> editingHighlight = highlight },
+                        onSaveNote = { highlight, note ->
+                            editingHighlight = null
+                            lifecycleScope.launch {
+                                highlightDao.updateNote(
+                                    highlight.id,
+                                    note.trim().ifEmpty { null }
+                                )
+                            }
+                        },
+                        onDeleteHighlight = { highlight ->
+                            editingHighlight = null
+                            lifecycleScope.launch { highlightDao.delete(highlight.id) }
+                        },
+                        onDismissEdit = { editingHighlight = null },
                         onClose = { finish() }
                     )
                 }
@@ -246,6 +380,8 @@ class ReaderActivity : FragmentActivity() {
 
     companion object {
         private const val EXTRA_FILE_NAME = "fileName"
+        private const val HIGHLIGHT_GROUP = "user-highlights" // NEW
+        private const val MENU_COPY = 100 // NEW
 
         fun start(context: Context, fileName: String) {
             context.startActivity(

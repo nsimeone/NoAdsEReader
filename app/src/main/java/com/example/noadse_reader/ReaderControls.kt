@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -17,14 +18,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +54,8 @@ fun ReaderControls(
     theme: PageTheme,
     bookmarks: List<BookmarkEntity>,
     contents: List<TocEntry>,
+    highlights: List<HighlightEntity>, // NEW
+    editingHighlight: HighlightEntity?, // NEW
     onFontSize: (Double) -> Unit,
     onTheme: (PageTheme) -> Unit,
     onSeek: (Float) -> Unit,
@@ -57,10 +64,136 @@ fun ReaderControls(
     onOpenBookmark: (BookmarkEntity) -> Unit,
     onDeleteBookmark: (BookmarkEntity) -> Unit,
     onOpenContents: (Int) -> Unit,
+    onOpenHighlight: (HighlightEntity) -> Unit, // NEW
+    onEditHighlight: (HighlightEntity) -> Unit, // NEW
+    onSaveNote: (HighlightEntity, String) -> Unit, // NEW
+    onDeleteHighlight: (HighlightEntity) -> Unit, // NEW
+    onDismissEdit: () -> Unit, // NEW
     onClose: () -> Unit
 ) {
     var showBookmarks by remember { mutableStateOf(false) }
     var showContents by remember { mutableStateOf(false) }
+    var showHighlights by remember { mutableStateOf(false) } // NEW
+
+    // NEW: the note editor. It opens when you tap a highlight on the page,
+    // or press "Note" in the Highlights list.
+    if (editingHighlight != null) {
+        var noteText by remember(editingHighlight.id) {
+            mutableStateOf(editingHighlight.note ?: "")
+        }
+        AlertDialog(
+            onDismissRequest = onDismissEdit,
+            title = { Text("Highlight") },
+            text = {
+                Column {
+                    Text(
+                        text = editingHighlight.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        label = { Text("Your note") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onSaveNote(editingHighlight, noteText) }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { onDeleteHighlight(editingHighlight) }) {
+                        Text("Remove")
+                    }
+                    TextButton(onClick = onDismissEdit) { Text("Cancel") }
+                }
+            }
+        )
+    }
+
+    // NEW: the list of all highlights in this book.
+    if (showHighlights) {
+        AlertDialog(
+            onDismissRequest = { showHighlights = false },
+            title = { Text("Highlights") },
+            text = {
+                if (highlights.isEmpty()) {
+                    Text(
+                        "No highlights yet. Press and hold a word in the book, drag to " +
+                                "select, then choose a color."
+                    )
+                } else {
+                    LazyColumn {
+                        items(highlights, key = { it.id }) { highlight ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onOpenHighlight(highlight)
+                                        showHighlights = false
+                                    }
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 4.dp, end = 10.dp)
+                                        .size(14.dp)
+                                        .background(
+                                            Color(HighlightColor.fromName(highlight.color).argb),
+                                            CircleShape
+                                        )
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = highlight.text,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (!highlight.note.isNullOrBlank()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Note: ${highlight.note}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    highlight.progress?.let {
+                                        Text(
+                                            "${(it * 100).roundToInt()}% through the book",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    Row {
+                                        TextButton(onClick = { onEditHighlight(highlight) }) {
+                                            Text(
+                                                if (highlight.note.isNullOrBlank()) "Add note"
+                                                else "Edit note"
+                                            )
+                                        }
+                                        TextButton(onClick = { onDeleteHighlight(highlight) }) {
+                                            Text("Remove")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHighlights = false }) { Text("Close") }
+            }
+        )
+    }
 
     if (showBookmarks) {
         AlertDialog(
@@ -220,7 +353,15 @@ fun ReaderControls(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    // NEW: Highlights button, next to Contents
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { showHighlights = true },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Highlights (${highlights.size})", maxLines = 1)
+                        }
                         OutlinedButton(
                             onClick = { showContents = true },
                             modifier = Modifier.weight(1f),
@@ -228,6 +369,10 @@ fun ReaderControls(
                         ) {
                             Text("Contents", maxLines = 1)
                         }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = onGoToStart,
                             modifier = Modifier.weight(1f),

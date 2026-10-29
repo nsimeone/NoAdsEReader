@@ -38,6 +38,18 @@ data class BookmarkEntity(
     val createdAt: Long
 )
 
+@Entity(tableName = "highlights")
+data class HighlightEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookFileName: String,
+    val locator: String,
+    val text: String,
+    val color: String,
+    val note: String? = null,
+    val progress: Double?,
+    val createdAt: Long
+)
+
 @Dao
 interface BookDao {
     @Query("SELECT * FROM books ORDER BY title COLLATE NOCASE")
@@ -86,6 +98,27 @@ interface BookmarkDao {
     suspend fun deleteAllFor(fileName: String)
 }
 
+@Dao
+interface HighlightDao {
+    @Query(
+        "SELECT * FROM highlights WHERE bookFileName = :fileName " +
+                "ORDER BY progress ASC, createdAt ASC"
+    )
+    fun observeFor(fileName: String): Flow<List<HighlightEntity>>
+
+    @Insert
+    suspend fun insert(highlight: HighlightEntity)
+
+    @Query("UPDATE highlights SET note = :note WHERE id = :id")
+    suspend fun updateNote(id: Long, note: String?)
+
+    @Query("DELETE FROM highlights WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM highlights WHERE bookFileName = :fileName")
+    suspend fun deleteAllFor(fileName: String)
+}
+
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override suspend fun migrate(connection: SQLiteConnection) {
         connection.prepare("ALTER TABLE books ADD COLUMN lastLocator TEXT").use { it.step() }
@@ -118,14 +151,31 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override suspend fun migrate(connection: SQLiteConnection) {
+        connection.prepare(
+            "CREATE TABLE IF NOT EXISTS highlights (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "bookFileName TEXT NOT NULL, " +
+                    "locator TEXT NOT NULL, " +
+                    "text TEXT NOT NULL, " +
+                    "color TEXT NOT NULL, " +
+                    "note TEXT, " +
+                    "progress REAL, " +
+                    "createdAt INTEGER NOT NULL)"
+        ).use { it.step() }
+    }
+}
+
 @Database(
-    entities = [BookEntity::class, BookmarkEntity::class],
-    version = 5,
+    entities = [BookEntity::class, BookmarkEntity::class, HighlightEntity::class],
+    version = 6,
     exportSchema = false
 )
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun books(): BookDao
     abstract fun bookmarks(): BookmarkDao
+    abstract fun highlights(): HighlightDao
 
     companion object {
         @Volatile
@@ -142,7 +192,8 @@ abstract class LibraryDatabase : RoomDatabase() {
                         MIGRATION_1_2,
                         MIGRATION_2_3,
                         MIGRATION_3_4,
-                        MIGRATION_4_5
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
                     )
                     .build()
                     .also { instance = it }
